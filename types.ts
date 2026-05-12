@@ -54,4 +54,5 @@ export interface GameState {
   batchCount: number; // 当前批次大小 1/3/5
   caseCounters: Record<string, number>; // 每个箱子的开箱累计 { caseId: count }
   freeCases: Record<string, number>; // 每个箱子的免费次数 { caseId: count }
+  pityCounters: Record<string, number>; // 每个箱子的保底计数 { caseId: count }
 }

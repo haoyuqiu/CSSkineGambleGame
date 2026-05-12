@@ -139,6 +139,7 @@ export default function App() {
     batchCount: 1,
     caseCounters: {},
     freeCases: {},
+    pityCounters: {},
   });
 
   const [activeTab, setActiveTab] = useState<'open' | 'inventory'>('open');
@@ -162,20 +163,56 @@ export default function App() {
     const paidCost = gameCase.price * payCount;
     if (gameState.balance < paidCost) return;
 
+    const startPity = gameState.pityCounters[gameCase.id] || 0;
+
+    // 找出该箱子违禁级(covert)皮肤作为保底目标
+    const covertSkins = gameCase.items
+      .filter(i => SKINS.find(s => s.id === i.skinId)?.rarity === 'covert')
+      .map(i => ({ skin: SKINS.find(s => s.id === i.skinId)!, prob: i.probability }));
+
     const ITEM_W = 140;
     const CENTER_IDX = 2;
     const slots: { sequence: Skin[]; targetOffset: number; winningSkin: Skin }[] = [];
 
+    // 保底：每槽独立计算，前面槽出红后后续槽的保底归零
+    let runningPity = startPity;
+    let paidSoFar = 0; // 已处理的付费槽数
+    let hitPityAt = -1;
+
     for (let slot = 0; slot < batchMultiplier; slot++) {
-      // 根据概率抽取结果
-      const roll = Math.random();
-      let cumulative = 0;
-      let winningSkinId = gameCase.items[0].skinId;
-      for (const item of gameCase.items) {
-        cumulative += item.probability;
-        if (roll <= cumulative) { winningSkinId = item.skinId; break; }
+      const isFreeSlot = slot < freeUsed;
+      // 当前槽的保底计数：免费槽不增加，付费槽按 runningPity 计算
+      const slotPity = isFreeSlot ? 0 : runningPity;
+      const pityBonus = slotPity >= 70 ? Math.min((slotPity - 69) * 0.05, 1) : 0;
+      const pityTarget = covertSkins.length > 0 ? covertSkins[Math.floor(Math.random() * covertSkins.length)] : null;
+
+      // 根据概率抽取结果（含保底加成）
+      let winningSkinId: string;
+      if (pityTarget && pityBonus > 0 && Math.random() < pityBonus) {
+        winningSkinId = pityTarget.skin.id;
+        if (hitPityAt < 0) hitPityAt = slot;
+      } else {
+        const roll = Math.random();
+        let cumulative = 0;
+        let picked = gameCase.items[0].skinId;
+        for (const item of gameCase.items) {
+          cumulative += item.probability;
+          if (roll <= cumulative) { picked = item.skinId; break; }
+        }
+        winningSkinId = picked;
       }
       const winningSkin = SKINS.find(s => s.id === winningSkinId)!;
+
+      // 付费槽：推进保底计数；若出红(covert/rare_special)则归零
+      if (!isFreeSlot) {
+        runningPity++;
+        if (winningSkin.rarity === 'covert' || winningSkin.rarity === 'rare_special') {
+          runningPity = 0;
+        }
+        paidSoFar++;
+      }
+
+      // 生成滚动序列（不变）
 
       // 生成滚动序列
       const otherSkins = SKINS.filter(s => s.id !== winningSkinId);
@@ -270,6 +307,12 @@ export default function App() {
           const bonusFree = Math.floor(newCount / 10) - Math.floor(prevCount / 10);
           const finalCounter = newCount % 10;
           const extraHistory = bonusFree > 0 ? [`🎁 ${gameCase.name} 累计开箱${Math.floor(newCount / 10) * 10}次，获得${bonusFree}次免费开箱！`] : [];
+
+          // 保底计数：已通过 sequential 按槽处理，直接用 runningPity
+          if (hitPityAt >= 0) {
+            extraHistory.push(`🍀 保底触发！${gameCase.name} 第${hitPityAt + 1}槽出红，保底已重置。`);
+          }
+
           return {
             ...prev,
             rollOffsets: slots.map(s => s.targetOffset),
@@ -278,6 +321,7 @@ export default function App() {
             inventory: [...newItems, ...prev.inventory],
             caseCounters: { ...prev.caseCounters, [gameCase.id]: finalCounter },
             freeCases: { ...prev.freeCases, [gameCase.id]: (prev.freeCases[gameCase.id] || 0) + bonusFree },
+            pityCounters: { ...prev.pityCounters, [gameCase.id]: runningPity },
             history: [...extraHistory, ...historyLines, ...prev.history.slice(0, 49)],
           };
         });
@@ -344,6 +388,7 @@ export default function App() {
       batchCount: 1,
       caseCounters: {},
       freeCases: {},
+      pityCounters: {},
     });
   };
 
@@ -529,6 +574,13 @@ export default function App() {
                         className="h-full bg-gradient-to-r from-amber-500 to-amber-400 rounded-full transition-all duration-500"
                         style={{ width: `${((gameState.caseCounters[c.id] || 0) / 10) * 100}%` }}
                       />
+                    </div>
+                    {/* 保底计数 */}
+                    <div className="flex items-center justify-between text-[10px] mt-1.5">
+                      <span className="text-stone-500">🍀 保底</span>
+                      <span className={`font-bold ${(gameState.pityCounters[c.id] || 0) >= 70 ? 'text-amber-400' : 'text-stone-400'}`}>
+                        {gameState.pityCounters[c.id] || 0}抽 {((gameState.pityCounters[c.id] || 0) >= 70) ? `(+${Math.min(((gameState.pityCounters[c.id] || 0) - 69) * 5, 95)}%)` : ''}
+                      </span>
                     </div>
                   </div>
 
@@ -789,6 +841,12 @@ export default function App() {
                 className="h-full bg-gradient-to-r from-amber-500 to-amber-400 rounded-full transition-all duration-500"
                 style={{ width: `${(caseCounter / 10) * 100}%` }}
               />
+            </div>
+            <div className="flex items-center justify-between text-[10px] mt-1.5">
+              <span className="text-stone-500">🍀 保底</span>
+              <span className={`font-bold ${(gameState.pityCounters[currentCase.id] || 0) >= 70 ? 'text-amber-400' : 'text-stone-400'}`}>
+                {gameState.pityCounters[currentCase.id] || 0}抽 {((gameState.pityCounters[currentCase.id] || 0) >= 70) ? `(+${Math.min(((gameState.pityCounters[currentCase.id] || 0) - 69) * 5, 95)}%)` : ''}
+              </span>
             </div>
           </div>
 
