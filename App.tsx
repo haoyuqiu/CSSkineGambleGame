@@ -137,6 +137,8 @@ export default function App() {
     rollTargets: [0],
     openingResults: [],
     batchCount: 1,
+    caseCounters: {},
+    freeCases: {},
   });
 
   const [activeTab, setActiveTab] = useState<'open' | 'inventory'>('open');
@@ -154,8 +156,11 @@ export default function App() {
 
   // ============ 开箱逻辑（多槽并行横向滚动） ============
   const startOpening = useCallback((gameCase: GameCase) => {
-    const totalCost = gameCase.price * batchMultiplier;
-    if (gameState.balance < totalCost) return;
+    const availableFree = gameState.freeCases[gameCase.id] || 0;
+    const freeUsed = Math.min(availableFree, batchMultiplier);
+    const payCount = batchMultiplier - freeUsed;
+    const paidCost = gameCase.price * payCount;
+    if (gameState.balance < paidCost) return;
 
     const ITEM_W = 140;
     const CENTER_IDX = 2;
@@ -189,7 +194,8 @@ export default function App() {
 
     setGameState(prev => ({
       ...prev,
-      balance: prev.balance - totalCost,
+      balance: prev.balance - paidCost,
+      freeCases: freeUsed > 0 ? { ...prev.freeCases, [gameCase.id]: prev.freeCases[gameCase.id] - freeUsed } : prev.freeCases,
       currentCase: gameCase,
       phase: 'ROLLING',
       openingResult: null,
@@ -258,19 +264,28 @@ export default function App() {
           return `${s?.name || '??'} (${WEAR_NAMES[item.wear]})`;
         });
 
-        setGameState(prev => ({
-          ...prev,
-          rollOffsets: slots.map(s => s.targetOffset),
-          openingResults: results,
-          phase: 'RESULT',
-          inventory: [...newItems, ...prev.inventory],
-          history: [...historyLines, ...prev.history.slice(0, 49)],
-        }));
+        setGameState(prev => {
+          const prevCount = prev.caseCounters[gameCase.id] || 0;
+          const newCount = prevCount + payCount;
+          const bonusFree = Math.floor(newCount / 10) - Math.floor(prevCount / 10);
+          const finalCounter = newCount % 10;
+          const extraHistory = bonusFree > 0 ? [`🎁 ${gameCase.name} 累计开箱${Math.floor(newCount / 10) * 10}次，获得${bonusFree}次免费开箱！`] : [];
+          return {
+            ...prev,
+            rollOffsets: slots.map(s => s.targetOffset),
+            openingResults: results,
+            phase: 'RESULT',
+            inventory: [...newItems, ...prev.inventory],
+            caseCounters: { ...prev.caseCounters, [gameCase.id]: finalCounter },
+            freeCases: { ...prev.freeCases, [gameCase.id]: (prev.freeCases[gameCase.id] || 0) + bonusFree },
+            history: [...extraHistory, ...historyLines, ...prev.history.slice(0, 49)],
+          };
+        });
       }
     };
 
     requestAnimationFrame(animate);
-  }, [gameState.balance, muted, batchMultiplier]);
+  }, [gameState.balance, muted, batchMultiplier, gameState.freeCases, gameState.caseCounters]);
 
   const closeResult = () => {
     lastOpenedItemsRef.current = [];
@@ -327,6 +342,8 @@ export default function App() {
       rollTargets: [0],
       openingResults: [],
       batchCount: 1,
+      caseCounters: {},
+      freeCases: {},
     });
   };
 
@@ -489,11 +506,30 @@ export default function App() {
                   </div>
 
                   {/* 期望收益率 */}
-                  <div className="mb-4 text-xs text-stone-400 flex items-center gap-1">
+                  <div className="mb-3 text-xs text-stone-400 flex items-center gap-1">
                     <span>📊 期望回收率：</span>
                     <span className={`font-bold ${expectedReturn >= 0.85 ? 'text-emerald-400' : expectedReturn >= 0.7 ? 'text-amber-400' : 'text-red-400'}`}>
                       {(expectedReturn * 100).toFixed(1)}%
                     </span>
+                  </div>
+
+                  {/* 箱子独立累计进度 */}
+                  <div className="mb-3 bg-stone-900/50 rounded-lg p-2">
+                    <div className="flex items-center justify-between text-xs mb-1">
+                      <span className="text-stone-400">📦 累计</span>
+                      <div className="flex items-center gap-1">
+                        {(gameState.freeCases[c.id] || 0) > 0 && (
+                          <span className="text-amber-400 font-bold animate-pulse">🎁 ×{gameState.freeCases[c.id]}</span>
+                        )}
+                        <span className="text-stone-500">{gameState.caseCounters[c.id] || 0}/10</span>
+                      </div>
+                    </div>
+                    <div className="h-1.5 bg-stone-700 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-gradient-to-r from-amber-500 to-amber-400 rounded-full transition-all duration-500"
+                        style={{ width: `${((gameState.caseCounters[c.id] || 0) / 10) * 100}%` }}
+                      />
+                    </div>
                   </div>
 
                   <div className="flex items-center justify-between mt-auto">
@@ -508,7 +544,7 @@ export default function App() {
                       disabled={!canAfford}
                       className={`px-4 py-2 rounded-xl font-bold text-sm transition-all ${canAfford ? 'bg-amber-500 hover:bg-amber-400 text-stone-900 hover:scale-105 active:scale-95' : 'bg-stone-700 text-stone-500 cursor-not-allowed'}`}
                     >
-                      {canAfford ? '🔑 开箱' : '余额不足'}
+                      {canAfford ? ((gameState.freeCases[c.id] || 0) > 0 ? '🎁 免费开箱' : '🔑 开箱') : '余额不足'}
                     </button>
                   </div>
                 </div>
@@ -660,6 +696,16 @@ export default function App() {
     if (results.length === 0) return null;
     const items = lastOpenedItemsRef.current;
     const totalRecycle = items.reduce((s, it) => s + getItemRecyclePrice(it), 0);
+    const currentCase = gameState.currentCase;
+    if (!currentCase) return null;
+
+    // 再来一次的计算
+    const freeAvailable = gameState.freeCases[currentCase.id] || 0;
+    const againFreeUsed = Math.min(freeAvailable, batchMultiplier);
+    const againPayCount = batchMultiplier - againFreeUsed;
+    const againCost = currentCase.price * againPayCount;
+    const canAffordAgain = gameState.balance >= againCost || againPayCount === 0;
+    const caseCounter = gameState.caseCounters[currentCase.id] || 0;
 
     // 取最高稀有度作为特效
     const bestSkin = results.reduce((best, r) => {
@@ -712,23 +758,68 @@ export default function App() {
           </div>
 
           {/* 总计回收价格 */}
-          <div className="text-emerald-400 font-bold mb-4">总回收价：¥{totalRecycle}</div>
+          <div className="text-emerald-400 font-bold mb-2">总回收价：¥{totalRecycle}</div>
+
+          {/* 当前余额 & 再来一次价格 */}
+          <div className="flex items-center justify-center gap-4 mb-3 text-sm">
+            <span className="text-stone-400">余额 <span className="text-white font-bold">¥{gameState.balance}</span></span>
+            <span className="text-stone-600">|</span>
+            <span className="text-stone-400">
+              再来{results.length}次：
+              {againFreeUsed > 0 && <span className="text-amber-400 font-bold">🎁{againFreeUsed} </span>}
+              {againPayCount > 0 ? (
+                <span className={canAffordAgain ? 'text-amber-400 font-bold' : 'text-red-400 font-bold'}>¥{againCost}</span>
+              ) : (
+                <span className="text-emerald-400 font-bold">免费</span>
+              )}
+            </span>
+          </div>
+
+          {/* 该箱子累计进度 */}
+          <div className="mb-4 bg-stone-900/60 rounded-lg p-2 max-w-xs mx-auto">
+            <div className="flex items-center justify-between text-xs mb-1">
+              <span className="text-stone-500">📦 {currentCase.name}</span>
+              <div className="flex items-center gap-1">
+                {freeAvailable > 0 && <span className="text-amber-400 font-bold text-xs">🎁×{freeAvailable}</span>}
+                <span className="text-stone-400">{caseCounter}/10</span>
+              </div>
+            </div>
+            <div className="h-1.5 bg-stone-700 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-gradient-to-r from-amber-500 to-amber-400 rounded-full transition-all duration-500"
+                style={{ width: `${(caseCounter / 10) * 100}%` }}
+              />
+            </div>
+          </div>
 
           {/* 按钮组 */}
           <div className="flex gap-3">
             <button
               onClick={recycleResult}
-              className="flex-1 py-4 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-lg rounded-xl transition-all hover:scale-105 active:scale-95 flex items-center justify-center gap-2"
+              className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm rounded-xl transition-all hover:scale-105 active:scale-95 flex items-center justify-center gap-1"
             >
-              <Trash2 size={20} /> 全部回收 +¥{totalRecycle}
+              <Trash2 size={18} /> 回收 +¥{totalRecycle}
             </button>
             <button
               onClick={closeResult}
-              className="flex-1 py-4 bg-amber-500 hover:bg-amber-400 text-stone-900 font-bold text-lg rounded-xl transition-all hover:scale-105 active:scale-95 flex items-center justify-center gap-2"
+              className="flex-1 py-3 bg-stone-700 hover:bg-stone-600 text-stone-300 font-bold text-sm rounded-xl transition-all hover:scale-105 active:scale-95 flex items-center justify-center gap-1"
             >
-              全部保留 <ChevronRight />
+              保留返回 <ChevronRight size={16} />
             </button>
           </div>
+          <button
+            onClick={() => startOpening(currentCase)}
+            disabled={!canAffordAgain}
+            className={`w-full mt-2 py-3 font-bold text-sm rounded-xl transition-all hover:scale-105 active:scale-95 ${
+              canAffordAgain
+                ? 'bg-amber-500 hover:bg-amber-400 text-stone-900'
+                : 'bg-stone-700 text-stone-500 cursor-not-allowed'
+            }`}
+          >
+            {canAffordAgain
+              ? (againPayCount === 0 ? '🎁 再来一次 (免费)' : `🔁 再来一次 -¥${againCost}`)
+              : '💰 余额不足'}
+          </button>
         </div>
       </div>
     );

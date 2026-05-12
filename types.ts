@@ -52,4 +52,6 @@ export interface GameState {
   rollTargets: number[]; // 每槽最终目标偏移(px)
   openingResults: Skin[]; // 多槽开箱结果
   batchCount: number; // 当前批次大小 1/3/5
+  caseCounters: Record<string, number>; // 每个箱子的开箱累计 { caseId: count }
+  freeCases: Record<string, number>; // 每个箱子的免费次数 { caseId: count }
 }
