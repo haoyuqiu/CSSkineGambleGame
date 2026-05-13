@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { ShoppingCart, Wallet, ChevronRight, ArrowLeft, Package, Zap, TrendingUp, Trash2, Volume2, VolumeX } from 'lucide-react';
-import { GameState, GamePhase, Skin, GameCase, InventoryItem } from './types';
+import { GameState, GamePhase, Skin, GameCase, InventoryItem, Rarity } from './types';
 import { CASES, SKINS, WEAPONS, RARITY_CONFIG, WEAR_LEVELS, INITIAL_BALANCE, getRecyclePrice, getCaseExpectedReturn } from './constants';
 
 // ============ CS:GO 风格音效引擎 (Web Audio API) ============
@@ -417,6 +417,36 @@ export default function App() {
     });
   };
 
+  const [sellFilter, setSellFilter] = useState<Rarity | 'all'>('all');
+
+  const bulkSell = () => {
+    setGameState(prev => {
+      const rarityOrder = ['consumer','industrial','milspec','restricted','classified','covert','rare_special'];
+      const filterIdx = sellFilter === 'all' ? -1 : rarityOrder.indexOf(sellFilter);
+      let totalPrice = 0;
+      const remaining: InventoryItem[] = [];
+      const soldNames: string[] = [];
+      prev.inventory.forEach(item => {
+        const skin = SKINS.find(s => s.id === item.skinId);
+        if (!skin) { remaining.push(item); return; }
+        const idx = rarityOrder.indexOf(skin.rarity);
+        if (filterIdx === -1 || idx < filterIdx) {
+          totalPrice += getItemRecyclePrice(item);
+          soldNames.push(skin.name);
+        } else {
+          remaining.push(item);
+        }
+      });
+      if (soldNames.length === 0) return prev;
+      return {
+        ...prev,
+        balance: prev.balance + totalPrice,
+        inventory: remaining,
+        history: [`批量回收(${soldNames.length}件)：${soldNames.slice(0, 3).join(', ')}${soldNames.length > 3 ? ` +${soldNames.length - 3}件` : ''} → +¥${totalPrice}`, ...prev.history.slice(0, 49)],
+      };
+    });
+  };
+
   // ============ 渲染 ============
 
   // 主菜单
@@ -608,6 +638,30 @@ export default function App() {
         // 库存页面
         <div>
           <h2 className="text-2xl font-bold text-white mb-6">我的库存 ({gameState.inventory.length})</h2>
+          {gameState.inventory.length > 0 && (
+            <div className="flex items-center gap-3 mb-4 flex-wrap">
+              <select
+                value={sellFilter}
+                onChange={e => setSellFilter(e.target.value as Rarity | 'all')}
+                className="bg-stone-800 border border-stone-600 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-amber-500"
+              >
+                <option value="all">低于：全部出售</option>
+                <option value="rare_special">低于：稀有特殊</option>
+                <option value="covert">低于：隐秘</option>
+                <option value="classified">低于：保密</option>
+                <option value="restricted">低于：受限</option>
+                <option value="milspec">低于：军规级</option>
+                <option value="industrial">低于：工业级</option>
+                <option value="consumer">仅消费级</option>
+              </select>
+              <button
+                onClick={bulkSell}
+                className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm rounded-xl transition-all flex items-center gap-1"
+              >
+                <Trash2 size={16} /> 一键出售
+              </button>
+            </div>
+          )}
           {gameState.inventory.length === 0 ? (
             <div className="text-center py-20 text-stone-500">
               <Package size={64} className="mx-auto mb-4 opacity-30" />
@@ -851,7 +905,7 @@ export default function App() {
           </div>
 
           {/* 按钮组 */}
-          <div className="flex gap-3">
+          <div className="flex gap-3 mb-2">
             <button
               onClick={recycleResult}
               className="flex-1 py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-sm rounded-xl transition-all hover:scale-105 active:scale-95 flex items-center justify-center gap-1"
@@ -865,6 +919,35 @@ export default function App() {
               保留返回 <ChevronRight size={16} />
             </button>
           </div>
+          <button
+            onClick={() => {
+              // 回收逻辑
+              setGameState(prev => {
+                const its = lastOpenedItemsRef.current;
+                if (its.length === 0 || !currentCase) return prev;
+                let tp = 0;
+                its.forEach(it => { tp += getItemRecyclePrice(it); });
+                return {
+                  ...prev,
+                  balance: prev.balance + tp,
+                  inventory: prev.inventory.slice(its.length),
+                  phase: 'CASE_SELECT',
+                  currentCase: null,
+                  openingResult: null,
+                  openingResults: [],
+                  rollSequence: [],
+                  rollOffsets: [0],
+                  rollTargets: [0],
+                  history: [`回收并再来一次 → +¥${tp}`, ...prev.history.slice(0, 49)],
+                };
+              });
+              lastOpenedItemsRef.current = [];
+              setTimeout(() => startOpening(currentCase), 50);
+            }}
+            className="w-full py-3 bg-gradient-to-r from-emerald-600 to-amber-500 hover:from-emerald-500 hover:to-amber-400 text-white font-bold text-sm rounded-xl transition-all hover:scale-105 active:scale-95 flex items-center justify-center gap-2"
+          >
+            <Trash2 size={16} /> 回收并再来一次
+          </button>
           <button
             onClick={() => startOpening(currentCase)}
             disabled={!canAffordAgain}
