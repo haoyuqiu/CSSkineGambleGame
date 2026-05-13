@@ -947,6 +947,9 @@ export default function App() {
             className="w-full py-3 bg-gradient-to-r from-emerald-600 to-amber-500 hover:from-emerald-500 hover:to-amber-400 text-white font-bold text-sm rounded-xl transition-all hover:scale-105 active:scale-95 flex items-center justify-center gap-2"
           >
             <Trash2 size={16} /> 回收并再来一次
+            <span className="text-xs opacity-80 ml-1">
+              (+¥{totalRecycle} - ¥{againCost} = {totalRecycle - againCost >= 0 ? '+' : ''}¥{totalRecycle - againCost})
+            </span>
           </button>
           <button
             onClick={() => startOpening(currentCase)}
